@@ -1,6 +1,7 @@
 from PIL import Image, ImageDraw, ImageFont
 from typing import List, Set, Optional, Tuple
 import os, time, math, glob
+import io # <-- Importante: Añadido para manejar en RAM
 
 from config import IMAGES_DIR
 
@@ -40,16 +41,6 @@ def _soft_shadow_rect(size, radius=16, opacity=40):
     sdraw = ImageDraw.Draw(shadow)
     sdraw.rounded_rectangle([4, 4, w + 4, h + 4], radius, fill=(0, 0, 0, opacity))
     return shadow
-
-# ---------- Limpieza automática ----------
-def cleanup_images(directory: str, max_age_sec: int = 86400):
-    now = time.time()
-    for f in glob.glob(os.path.join(directory, "*.png")):
-        try:
-            if now - os.path.getmtime(f) > max_age_sec:
-                os.remove(f)
-        except Exception:
-            pass
 
 # ---------- Tablero Principal (1..90) ----------
 def _draw_board(draw, origin, size, called: Set[int], last: Optional[int], fonts):
@@ -148,20 +139,17 @@ def _draw_card(im: Image.Image, draw, origin, size, numbers: List[int], called: 
     cw = (w - 2*PAD) // cols
     ch = (h - (GRID_TOP - y) - PAD) // rows
 
-    # Usamos num_font (más pequeña) porque hay más celdas por fila
     chip_font = fonts["num"] 
 
     for idx, val in enumerate(nums):
         c = idx % cols
         r = idx // cols
         
-        # Generar "margen" interno entre chips
         x1 = grid_x + c*cw + 3
         y1 = grid_y + r*ch + 3
         x2 = grid_x + (c+1)*cw - 3
         y2 = grid_y + (r+1)*ch - 3
 
-        # Sombrita tenue
         chip_shadow = _soft_shadow_rect((x2 - x1, y2 - y1), radius=10, opacity=25)
         im.paste(chip_shadow, (x1-3, y1-3), chip_shadow)
 
@@ -186,7 +174,7 @@ def _draw_card(im: Image.Image, draw, origin, size, numbers: List[int], called: 
             _rounded(draw, (x1-2, y1-2, x2+2, y2+2), 10, fill=None, outline=ring, width=2)
 
 # ---------- Render principal ----------
-def render(state, chat_id: int) -> str:
+def render(state, chat_id: int) -> io.BytesIO:
     called: Set[int] = set(state.get("called") or [])
     cards: List[List[int]] = state.get("cards") or [[]]
     active = max(0, min(state.get("active", 0), len(cards)-1))
@@ -224,7 +212,7 @@ def render(state, chat_id: int) -> str:
     end = min(start + per_page, total)
     subset = list(enumerate(cards))[start:end]
 
-    # NUEVO LAYOUT: 2 columnas x 3 filas
+    # LAYOUT: 2 columnas x 3 filas
     cols = 2; rows = 3
     area_x, area_y = 860, 110
     area_w, area_h = W - area_x - 24, 820 - 110
@@ -249,7 +237,9 @@ def render(state, chat_id: int) -> str:
     footer = f"Cartones {start+1}-{end} de {total}  |  Página {page+1}/{pages}"
     draw.text((860, 840), footer, fill=text, font=fonts["small"])
 
-    path = os.path.join(IMAGES_DIR, f"board_{chat_id}_{int(time.time()*1000)}.png")
-    im.convert("RGB").save(path, "PNG")
-
-    return path
+    # --- CAMBIO AQUI: Enviar imagen desde memoria en vez de disco ---
+    bio = io.BytesIO()
+    bio.name = "board.png"
+    im.convert("RGB").save(bio, "PNG")
+    bio.seek(0)
+    return bio
